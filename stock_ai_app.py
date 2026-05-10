@@ -136,8 +136,8 @@ def draw_rsi(series):
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=series["rsi"].index, y=series["rsi"],
                              name="RSI", line=dict(color="#60a5fa", width=2)))
-    fig.add_hline(y=70, line_dash="dot", line_color="#f87171", annotation_text="売られすぎ70")
-    fig.add_hline(y=30, line_dash="dot", line_color="#4ade80", annotation_text="買われすぎ30")
+    fig.add_hline(y=70, line_dash="dot", line_color="#f87171", annotation_text="買われすぎ70")
+    fig.add_hline(y=30, line_dash="dot", line_color="#4ade80", annotation_text="売られすぎ30")
     fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10, r=10, t=20, b=10),
                       yaxis=dict(range=[0, 100]))
     return fig
