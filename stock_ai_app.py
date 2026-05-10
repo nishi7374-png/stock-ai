@@ -293,7 +293,7 @@ if analyze_btn and ticker_input:
     with col_macd:
         st.caption("MACD (12-26-9)")
         st.plotly_chart(draw_macd(series), use_container_width=True)
-st.caption("出来高")
+    st.caption("出来高")
     st.plotly_chart(draw_volume(df), use_container_width=True)
  
 # ── Claude AI 判断 ──
