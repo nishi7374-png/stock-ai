@@ -296,7 +296,7 @@ if analyze_btn and ticker_input:
     st.caption("出来高")
     st.plotly_chart(draw_volume(df), use_container_width=True)
  
-# ── Claude AI 判断 ──
+    # ── Claude AI 判断 ──
     st.markdown("---")
     st.subheader("🤖 Claude AI の売買判断")
 
