@@ -153,7 +153,24 @@ def draw_macd(series):
                              name="Signal", line=dict(color="#fbbf24", width=1.5)))
     fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10, r=10, t=20, b=10))
     return fig
-
+def draw_volume(df):
+    colors = ["#4ade80" if c >= o else "#f87171" 
+              for c, o in zip(df["Close"].squeeze(), df["Open"].squeeze())]
+    fig = go.Figure()
+    fig.add_trace(go.Bar(
+        x=df.index,
+        y=df["Volume"].squeeze(),
+        name="出来高",
+        marker_color=colors,
+        opacity=0.8,
+    ))
+    fig.update_layout(
+        template="plotly_dark",
+        height=180,
+        margin=dict(l=10, r=10, t=20, b=10),
+        yaxis=dict(title="出来高"),
+    )
+    return fig
 # ─────────────────────────────────────────
 # Claude AI 判断（ストリーミング）
 # ─────────────────────────────────────────
@@ -276,8 +293,10 @@ if analyze_btn and ticker_input:
     with col_macd:
         st.caption("MACD (12-26-9)")
         st.plotly_chart(draw_macd(series), use_container_width=True)
-
-    # ── Claude AI 判断 ──
+st.caption("出来高")
+    st.plotly_chart(draw_volume(df), use_container_width=True)
+ 
+# ── Claude AI 判断 ──
     st.markdown("---")
     st.subheader("🤖 Claude AI の売買判断")
 
