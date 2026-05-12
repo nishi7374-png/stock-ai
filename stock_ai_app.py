@@ -75,7 +75,9 @@ def build_indicators(df):
         "macd":       float(macd_line.iloc[-1]),
         "macd_sig":   float(signal_line.iloc[-1]),
         "macd_hist":  float(histogram.iloc[-1]),
-        "macd_prev":  float(histogram.iloc[-2]),
+       "macd_prev":  float(histogram.iloc[-2]),
+        "volume":     float(df["Volume"].squeeze().iloc[-1]),
+        "volume_ma5": float(df["Volume"].squeeze().rolling(5).mean().iloc[-1]),
         "bb_upper":   float(bb_upper.iloc[-1]),
         "bb_mid":     float(bb_mid.iloc[-1]),
         "bb_lower":   float(bb_lower.iloc[-1]),
@@ -184,6 +186,7 @@ def ask_claude_stream(client, ticker, ind):
 【RSI(14)】{ind['rsi']:.1f}
 【MACD】ライン={ind['macd']:.3f} / シグナル={ind['macd_sig']:.3f} / ヒスト={ind['macd_hist']:.3f}（前日={ind['macd_prev']:.3f}）
 【ボリンジャーバンド】上限={ind['bb_upper']:.2f} / 中央={ind['bb_mid']:.2f} / 下限={ind['bb_lower']:.2f}
+【出来高】直近={ind['volume']:.0f} / 5日平均={ind['volume_ma5']:.0f}
 
 以下の構成で回答してください：
 1. **総合判断**：「🟢 買い」「🔴 売り」「⚪ 様子見」のいずれかと確信度（高/中/低）
