@@ -1,15 +1,5 @@
 """
 株式テクニカル分析 × Claude AI判断 - Streamlitアプリ
-=====================================================
-セットアップ:
-  pip install streamlit yfinance pandas numpy anthropic plotly
-
-起動:
-  streamlit run stock_ai_app.py
-
-環境変数（必須）:
-  ANTHROPIC_API_KEY=sk-ant-xxxx  をあらかじめ設定するか、
-  アプリのサイドバーから入力してください。
 """
 
 import os
@@ -19,10 +9,6 @@ import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 from anthropic import Anthropic
-
-# ─────────────────────────────────────────
-# テクニカル指標
-# ─────────────────────────────────────────
 
 def calc_ma(close, window):
     return close.rolling(window).mean()
@@ -46,10 +32,6 @@ def calc_bollinger(close, window=20, num_std=2):
     mid = close.rolling(window).mean()
     std = close.rolling(window).std()
     return mid + num_std * std, mid, mid - num_std * std
-
-# ─────────────────────────────────────────
-# データ取得 & 指標計算
-# ─────────────────────────────────────────
 
 @st.cache_data(ttl=300)
 def fetch_data(ticker: str, period: str = "6mo"):
@@ -75,7 +57,7 @@ def build_indicators(df):
         "macd":       float(macd_line.iloc[-1]),
         "macd_sig":   float(signal_line.iloc[-1]),
         "macd_hist":  float(histogram.iloc[-1]),
-       "macd_prev":  float(histogram.iloc[-2]),
+        "macd_prev":  float(histogram.iloc[-2]),
         "volume":     float(df["Volume"].squeeze().iloc[-1]),
         "volume_ma5": float(df["Volume"].squeeze().rolling(5).mean().iloc[-1]),
         "bb_upper":   float(bb_upper.iloc[-1]),
@@ -91,17 +73,10 @@ def build_indicators(df):
     }
     return latest, series
 
-# ─────────────────────────────────────────
-# チャート描画
-# ─────────────────────────────────────────
-
 def draw_chart(df, series, ticker):
     close = series["close"]
     dates = close.index
-
     fig = go.Figure()
-
-    # ローソク足
     fig.add_trace(go.Candlestick(
         x=df.index,
         open=df["Open"].squeeze(),
@@ -112,25 +87,17 @@ def draw_chart(df, series, ticker):
         increasing_line_color="#4ade80",
         decreasing_line_color="#f87171",
     ))
-
-    # 移動平均線
     for label, col, color in [("MA5", "ma5", "#60a5fa"), ("MA25", "ma25", "#fbbf24"), ("MA75", "ma75", "#c084fc")]:
         fig.add_trace(go.Scatter(x=dates, y=series[col], name=label, line=dict(color=color, width=1.2)))
-
-    # ボリンジャーバンド
     fig.add_trace(go.Scatter(x=dates, y=series["bb_upper"], name="BB上限",
                              line=dict(color="#94a3b8", width=1, dash="dot")))
     fig.add_trace(go.Scatter(x=dates, y=series["bb_lower"], name="BB下限",
                              line=dict(color="#94a3b8", width=1, dash="dot"),
                              fill="tonexty", fillcolor="rgba(148,163,184,0.05)"))
-
     fig.update_layout(
         title=f"{ticker} 株価チャート",
         xaxis_rangeslider_visible=False,
-      xaxis=dict(
-            tickformat="%m/%d",
-            dtick="M1",
-        ),
+        xaxis=dict(tickformat="%m/%d", dtick="M1"),
         template="plotly_dark",
         height=420,
         margin=dict(l=10, r=10, t=40, b=10),
@@ -144,10 +111,15 @@ def draw_rsi(series):
                              name="RSI", line=dict(color="#60a5fa", width=2)))
     fig.add_hline(y=70, line_dash="dot", line_color="#f87171", annotation_text="買われすぎ70")
     fig.add_hline(y=30, line_dash="dot", line_color="#4ade80", annotation_text="売られすぎ30")
-    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10, r=10, t=20, b=10),
-                      yaxis=dict(range=[0, 100]),
-                      xaxis=dict(tickformat="%m/%d"))　　　
-　  return fig
+    fig.update_layout(
+        template="plotly_dark",
+        height=180,
+        margin=dict(l=10, r=10, t=20, b=10),
+        yaxis=dict(range=[0, 100]),
+        xaxis=dict(tickformat="%m/%d"),
+    )
+    return fig
+
 def draw_macd(series):
     fig = go.Figure()
     colors = ["#4ade80" if v >= 0 else "#f87171" for v in series["histogram"]]
@@ -157,11 +129,16 @@ def draw_macd(series):
                              name="MACD", line=dict(color="#60a5fa", width=1.5)))
     fig.add_trace(go.Scatter(x=series["signal_line"].index, y=series["signal_line"],
                              name="Signal", line=dict(color="#fbbf24", width=1.5)))
-    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10, r=10, t=20, b=10),
-                      xaxis=dict(tickformat="%m/%d"))
+    fig.update_layout(
+        template="plotly_dark",
+        height=180,
+        margin=dict(l=10, r=10, t=20, b=10),
+        xaxis=dict(tickformat="%m/%d"),
+    )
     return fig
+
 def draw_volume(df):
-    colors = ["#4ade80" if c >= o else "#f87171" 
+    colors = ["#4ade80" if c >= o else "#f87171"
               for c, o in zip(df["Close"].squeeze(), df["Open"].squeeze())]
     fig = go.Figure()
     fig.add_trace(go.Bar(
@@ -178,10 +155,7 @@ def draw_volume(df):
         yaxis=dict(title="出来高"),
         xaxis=dict(tickformat="%m/%d"),
     )
-        return fig
-# ─────────────────────────────────────────
-# Claude AI 判断（ストリーミング）
-# ─────────────────────────────────────────
+    return fig
 
 def ask_claude_stream(client, ticker, ind):
     prompt = f"""あなたは株式テクニカルアナリストです。以下の指標をもとに、プロの視点で売買判断を日本語で述べてください。
@@ -204,39 +178,15 @@ def ask_claude_stream(client, ticker, ind):
 ※ 投資判断はあくまで参考情報です。"""
 
     with client.messages.stream(
-        model="claude-opus-4-5",
+        model="claude-sonnet-4-20250514",
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
         for text in stream.text_stream:
             yield text
 
-# ─────────────────────────────────────────
-# Streamlit UI
-# ─────────────────────────────────────────
+st.set_page_config(page_title="株式AI分析", page_icon="📈", layout="wide")
 
-st.set_page_config(
-    page_title="株式AI分析",
-    page_icon="📈",
-    layout="wide",
-)
-
-st.markdown("""
-<style>
-  .metric-card {
-    background: #1a1a2e;
-    border-radius: 12px;
-    padding: 16px;
-    border: 1px solid #2a2a4a;
-    text-align: center;
-  }
-  .verdict-buy  { color: #4ade80; font-size: 1.4rem; font-weight: bold; }
-  .verdict-sell { color: #f87171; font-size: 1.4rem; font-weight: bold; }
-  .verdict-hold { color: #fbbf24; font-size: 1.4rem; font-weight: bold; }
-</style>
-""", unsafe_allow_html=True)
-
-# ── サイドバー ──
 with st.sidebar:
     st.title("⚙️ 設定")
     api_key = st.text_input(
@@ -255,7 +205,6 @@ with st.sidebar:
     st.markdown("---")
     st.caption("⚠️ 投資は自己責任で。このツールは参考情報です。")
 
-# ── メイン ──
 st.title("📈 株式テクニカル分析 × Claude AI")
 st.caption("リアルタイム株価データ × AIによる売買判断")
 
@@ -272,7 +221,6 @@ if analyze_btn and ticker_input:
         st.error("サイドバーにAnthropicのAPIキーを入力してください。")
         st.stop()
 
-    # データ取得
     with st.spinner(f"{ticker} のデータを取得中…"):
         df = fetch_data(ticker, period)
 
@@ -282,7 +230,6 @@ if analyze_btn and ticker_input:
 
     ind, series = build_indicators(df)
 
-    # ── 現在値サマリー ──
     st.markdown("---")
     change_color = "normal" if ind["change_pct"] >= 0 else "inverse"
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -292,7 +239,6 @@ if analyze_btn and ticker_input:
     c4.metric("RSI",  f"{ind['rsi']:.1f}")
     c5.metric("MACDヒスト", f"{ind['macd_hist']:.3f}")
 
-    # ── チャート ──
     st.plotly_chart(draw_chart(df, series, ticker), use_container_width=True)
 
     col_rsi, col_macd = st.columns(2)
@@ -302,10 +248,10 @@ if analyze_btn and ticker_input:
     with col_macd:
         st.caption("MACD (12-26-9)")
         st.plotly_chart(draw_macd(series), use_container_width=True)
+
     st.caption("出来高")
     st.plotly_chart(draw_volume(df), use_container_width=True)
- 
-    # ── Claude AI 判断 ──
+
     st.markdown("---")
     st.subheader("🤖 Claude AI の売買判断")
 
