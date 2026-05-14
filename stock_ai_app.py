@@ -179,8 +179,7 @@ def draw_volume(df):
         yaxis=dict(title="出来高"),
         xaxis=dict(tickformat="%m/%d"),
     )
-    )
-    return fig
+        return fig
 # ─────────────────────────────────────────
 # Claude AI 判断（ストリーミング）
 # ─────────────────────────────────────────
