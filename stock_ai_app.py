@@ -146,9 +146,8 @@ def draw_rsi(series):
     fig.add_hline(y=30, line_dash="dot", line_color="#4ade80", annotation_text="売られすぎ30")
     fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10, r=10, t=20, b=10),
                       yaxis=dict(range=[0, 100]),
-                      xaxis=dict(tickformat="%m/%d"))
-    return fig
-
+                      xaxis=dict(tickformat="%m/%d"))　　　
+　  return fig
 def draw_macd(series):
     fig = go.Figure()
     colors = ["#4ade80" if v >= 0 else "#f87171" for v in series["histogram"]]
