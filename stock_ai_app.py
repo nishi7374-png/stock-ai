@@ -127,6 +127,10 @@ def draw_chart(df, series, ticker):
     fig.update_layout(
         title=f"{ticker} 株価チャート",
         xaxis_rangeslider_visible=False,
+      xaxis=dict(
+            tickformat="%m/%d",
+            dtick="M1",
+        ),
         template="plotly_dark",
         height=420,
         margin=dict(l=10, r=10, t=40, b=10),
@@ -141,7 +145,8 @@ def draw_rsi(series):
     fig.add_hline(y=70, line_dash="dot", line_color="#f87171", annotation_text="買われすぎ70")
     fig.add_hline(y=30, line_dash="dot", line_color="#4ade80", annotation_text="売られすぎ30")
     fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10, r=10, t=20, b=10),
-                      yaxis=dict(range=[0, 100]))
+                      yaxis=dict(range=[0, 100]),
+                      xaxis=dict(tickformat="%m/%d"))
     return fig
 
 def draw_macd(series):
@@ -153,7 +158,8 @@ def draw_macd(series):
                              name="MACD", line=dict(color="#60a5fa", width=1.5)))
     fig.add_trace(go.Scatter(x=series["signal_line"].index, y=series["signal_line"],
                              name="Signal", line=dict(color="#fbbf24", width=1.5)))
-    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10, r=10, t=20, b=10))
+    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10, r=10, t=20, b=10),
+                      xaxis=dict(tickformat="%m/%d"))
     return fig
 def draw_volume(df):
     colors = ["#4ade80" if c >= o else "#f87171" 
@@ -171,6 +177,8 @@ def draw_volume(df):
         height=180,
         margin=dict(l=10, r=10, t=20, b=10),
         yaxis=dict(title="出来高"),
+        xaxis=dict(tickformat="%m/%d"),
+    )
     )
     return fig
 # ─────────────────────────────────────────
