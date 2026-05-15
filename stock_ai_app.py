@@ -1,9 +1,11 @@
 """
-株式テクニカル分析 × Claude AI判断 - Streamlitアプリ
+株式テクニカル分析 × Claude AI判断 - Streamlitアプリ（履歴保存機能付き）
 """
 
 import os
 import time
+import json
+from pathlib import Path
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -11,6 +13,39 @@ import yfinance as yf
 import plotly.graph_objects as go
 from anthropic import Anthropic
 
+# ─── 履歴ファイルのパス ───────────────────────────────────────────
+HISTORY_FILE = Path("analysis_history.json")
+
+def load_history():
+    if HISTORY_FILE.exists():
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_history(history):
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def add_to_history(ticker, ind, result_text):
+    history = load_history()
+    history.insert(0, {
+        "date": pd.Timestamp.now().strftime("%Y/%m/%d %H:%M"),
+        "ticker": ticker,
+        "price": ind["price"],
+        "change_pct": ind["change_pct"],
+        "rsi": ind["rsi"],
+        "result": result_text,
+    })
+    history = history[:30]  # 最新30件を保持
+    save_history(history)
+
+# ─── テクニカル指標の計算 ─────────────────────────────────────────
 def calc_ma(close, window):
     return close.rolling(window).mean()
 
@@ -36,14 +71,14 @@ def calc_bollinger(close, window=20, num_std=2):
 
 @st.cache_data(ttl=300)
 def fetch_data(ticker: str, period: str = "6mo"):
-    for attempt in range(3):  # 最大3回リトライ
+    for attempt in range(3):
         try:
             df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
             if not df.empty:
                 return df
         except Exception:
             pass
-        time.sleep(1)  # 1秒待ってリトライ
+        time.sleep(1)
     return None
 
 def build_indicators(df):
@@ -79,6 +114,7 @@ def build_indicators(df):
     }
     return latest, series
 
+# ─── チャート描画 ─────────────────────────────────────────────────
 def draw_chart(df, series, ticker):
     close = series["close"]
     dates = close.index
@@ -163,6 +199,7 @@ def draw_volume(df):
     )
     return fig
 
+# ─── Claude AI分析 ────────────────────────────────────────────────
 def ask_claude_stream(client, ticker, ind):
     prompt = f"""あなたは株式テクニカルアナリストです。以下の指標をもとに、プロの視点で売買判断を日本語で述べてください。
 
@@ -191,8 +228,10 @@ def ask_claude_stream(client, ticker, ind):
         for text in stream.text_stream:
             yield text
 
+# ─── ページ設定 ───────────────────────────────────────────────────
 st.set_page_config(page_title="株式AI分析", page_icon="📈", layout="wide")
 
+# ─── サイドバー ───────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚙️ 設定")
     api_key = st.text_input(
@@ -209,8 +248,29 @@ with st.sidebar:
     st.markdown("🇺🇸 Apple: `AAPL`")
     st.markdown("🇺🇸 NVIDIA: `NVDA`")
     st.markdown("---")
+
+    # 分析履歴
+    st.markdown("**📋 分析履歴**")
+    history = load_history()
+    if not history:
+        st.caption("まだ履歴がありません")
+    else:
+        # 履歴の全削除ボタン
+        if st.button("🗑️ 履歴を全削除", use_container_width=True):
+            save_history([])
+            st.rerun()
+
+        for i, h in enumerate(history):
+            change_emoji = "🟢" if h["change_pct"] >= 0 else "🔴"
+            label = f"{h['date']}  {h['ticker']}  {change_emoji}"
+            with st.expander(label):
+                st.caption(f"価格: {h['price']:,.2f}　前日比: {h['change_pct']:+.2f}%　RSI: {h['rsi']:.1f}")
+                st.markdown(h["result"])
+
+    st.markdown("---")
     st.caption("⚠️ 投資は自己責任で。このツールは参考情報です。")
 
+# ─── メイン ───────────────────────────────────────────────────────
 st.title("📈 株式テクニカル分析 × Claude AI")
 st.caption("リアルタイム株価データ × AIによる売買判断")
 
@@ -271,6 +331,10 @@ if analyze_btn and ticker_input:
             full_text += chunk
             response_box.markdown(full_text + "▌")
     response_box.markdown(full_text)
+
+    # 履歴に保存
+    add_to_history(ticker, ind, full_text)
+    st.success("✅ 分析結果を履歴に保存しました（サイドバーで確認できます）")
 
 elif analyze_btn and not ticker_input:
     st.warning("銘柄コードを入力してください。")
