@@ -8,6 +8,11 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
+if df is None or df.empty:
+    st.error(f"「{ticker}」のデータが取得できませんでした。\n\n"
+             "・銘柄コードを確認してください（日本株は末尾に `.T` が必要です）\n"
+             "・時間をおいて再度お試しください")
+    st.stop()
 from anthropic import Anthropic
 
 def calc_ma(close, window):
@@ -35,10 +40,15 @@ def calc_bollinger(close, window=20, num_std=2):
 
 @st.cache_data(ttl=300)
 def fetch_data(ticker: str, period: str = "6mo"):
-    df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
-    if df.empty:
-        return None
-    return df
+    for attempt in range(3):  # 最大3回リトライ
+        try:
+            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
+            if not df.empty:
+                return df
+        except Exception:
+            pass
+        time.sleep(1)  # 1秒待ってリトライ
+    return None
 
 def build_indicators(df):
     close = df["Close"].squeeze()
