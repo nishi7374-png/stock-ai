@@ -178,7 +178,7 @@ def ask_claude_stream(client, ticker, ind):
 ※ 投資判断はあくまで参考情報です。"""
 
     with client.messages.stream(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5",
         max_tokens=1000,
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
