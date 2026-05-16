@@ -32,11 +32,12 @@ def save_history(history):
     except Exception:
         pass
 
-def add_to_history(ticker, ind, result_text):
+def add_to_history(ticker, company_name, ind, result_text):
     history = load_history()
     history.insert(0, {
         "date": pd.Timestamp.now().strftime("%Y/%m/%d %H:%M"),
         "ticker": ticker,
+        "company_name": company_name,
         "price": ind["price"],
         "change_pct": ind["change_pct"],
         "rsi": ind["rsi"],
@@ -75,11 +76,13 @@ def fetch_data(ticker: str, period: str = "6mo"):
         try:
             df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
             if not df.empty:
-                return df
+                info = yf.Ticker(ticker).info
+                name = info.get("longName") or info.get("shortName") or ticker
+                return df, name
         except Exception:
             pass
         time.sleep(1)
-    return None
+    return None, ticker
 
 def build_indicators(df):
     close = df["Close"].squeeze()
@@ -115,7 +118,7 @@ def build_indicators(df):
     return latest, series
 
 # ─── チャート描画 ─────────────────────────────────────────────────
-def draw_chart(df, series, ticker):
+def draw_chart(df, series, ticker, company_name):
     close = series["close"]
     dates = close.index
     fig = go.Figure()
@@ -137,7 +140,7 @@ def draw_chart(df, series, ticker):
                              line=dict(color="#94a3b8", width=1, dash="dot"),
                              fill="tonexty", fillcolor="rgba(148,163,184,0.05)"))
     fig.update_layout(
-        title=f"{ticker} 株価チャート",
+        title=f"{ticker}（{company_name}） 株価チャート",
         xaxis_rangeslider_visible=False,
         xaxis=dict(tickformat="%m/%d", dtick="M1"),
         template="plotly_dark",
@@ -200,10 +203,10 @@ def draw_volume(df):
     return fig
 
 # ─── Claude AI分析 ────────────────────────────────────────────────
-def ask_claude_stream(client, ticker, ind):
+def ask_claude_stream(client, ticker, company_name, ind):
     prompt = f"""あなたは株式テクニカルアナリストです。以下の指標をもとに、プロの視点で売買判断を日本語で述べてください。
 
-【銘柄】{ticker}
+【銘柄】{ticker}（{company_name}）
 【現在値】{ind['price']:.2f}（前日比 {ind['change_pct']:+.2f}%）
 【移動平均線】MA5={ind['ma5']:.2f} / MA25={ind['ma25']:.2f} / MA75={ind['ma75']:.2f}
 【RSI(14)】{ind['rsi']:.1f}
@@ -262,7 +265,8 @@ with st.sidebar:
 
         for i, h in enumerate(history):
             change_emoji = "🟢" if h["change_pct"] >= 0 else "🔴"
-            label = f"{h['date']}  {h['ticker']}  {change_emoji}"
+            company = h.get("company_name", h["ticker"])
+            label = f"{h['date']}  {h['ticker']}（{company}）  {change_emoji}"
             with st.expander(label):
                 st.caption(f"価格: {h['price']:,.2f}　前日比: {h['change_pct']:+.2f}%　RSI: {h['rsi']:.1f}")
                 st.markdown(h["result"])
@@ -288,7 +292,7 @@ if analyze_btn and ticker_input:
         st.stop()
 
     with st.spinner(f"{ticker} のデータを取得中…"):
-        df = fetch_data(ticker, period)
+        df, company_name = fetch_data(ticker, period)
 
     if df is None or df.empty:
         st.error(f"「{ticker}」のデータが取得できませんでした。\n\n"
@@ -307,7 +311,7 @@ if analyze_btn and ticker_input:
     c4.metric("RSI",  f"{ind['rsi']:.1f}")
     c5.metric("MACDヒスト", f"{ind['macd_hist']:.3f}")
 
-    st.plotly_chart(draw_chart(df, series, ticker), use_container_width=True)
+    st.plotly_chart(draw_chart(df, series, ticker, company_name), use_container_width=True)
 
     col_rsi, col_macd = st.columns(2)
     with col_rsi:
@@ -321,19 +325,19 @@ if analyze_btn and ticker_input:
     st.plotly_chart(draw_volume(df), use_container_width=True)
 
     st.markdown("---")
-    st.subheader("🤖 Claude AI の売買判断")
+    st.subheader(f"🤖 テクニカル分析レポート：{ticker}（{company_name}）")
 
     client = Anthropic(api_key=api_key)
     response_box = st.empty()
     full_text = ""
     with st.spinner("Claude が分析中…"):
-        for chunk in ask_claude_stream(client, ticker, ind):
+        for chunk in ask_claude_stream(client, ticker, company_name, ind):
             full_text += chunk
             response_box.markdown(full_text + "▌")
     response_box.markdown(full_text)
 
     # 履歴に保存
-    add_to_history(ticker, ind, full_text)
+    add_to_history(ticker, company_name, ind, full_text)
     st.success("✅ 分析結果を履歴に保存しました（サイドバーで確認できます）")
 
 elif analyze_btn and not ticker_input:
