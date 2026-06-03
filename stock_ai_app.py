@@ -72,17 +72,54 @@ def calc_bollinger(close, window=20, num_std=2):
 
 @st.cache_data(ttl=300)
 def fetch_data(ticker: str, period: str = "6mo"):
+    """
+    yf.Ticker.history() を使って安定的にデータ取得。
+    リトライは最大3回、待機時間を段階的に増やす。
+    """
+    last_error = None
+
     for attempt in range(3):
         try:
-            df = yf.download(ticker, period=period, progress=False, auto_adjust=True)
-            if not df.empty:
-                info = yf.Ticker(ticker).info
+            tk = yf.Ticker(ticker)
+            df = tk.history(period=period, auto_adjust=True)
+
+            # カラム名を正規化（MultiIndexになっている場合がある）
+            if isinstance(df.columns, pd.MultiIndex):
+                df.columns = df.columns.get_level_values(0)
+
+            # タイムゾーン情報を除去（後続処理を安定させるため）
+            if df.index.tz is not None:
+                df.index = df.index.tz_localize(None)
+
+            # 必須カラムの確認
+            required_cols = {"Open", "High", "Low", "Close", "Volume"}
+            if not required_cols.issubset(df.columns):
+                raise ValueError(f"必要なカラムがありません: {required_cols - set(df.columns)}")
+
+            # データ件数チェック（最低20件ないと指標計算ができない）
+            if df is None or df.empty or len(df) < 20:
+                raise ValueError(f"データが少なすぎます（{len(df) if df is not None else 0}件）")
+
+            # 会社名を取得（失敗しても続行）
+            name = ticker
+            try:
+                info = tk.info
                 name = info.get("longName") or info.get("shortName") or ticker
-                return df, name
-        except Exception:
-            pass
-        time.sleep(1)
+            except Exception:
+                pass
+
+            return df, name
+
+        except Exception as e:
+            last_error = e
+            wait = 2 * (attempt + 1)  # 2秒 → 4秒 → 6秒
+            if attempt < 2:
+                time.sleep(wait)
+
+    # 3回すべて失敗した場合
+    st.error(f"データ取得に失敗しました（最終エラー: {last_error}）")
     return None, ticker
+
 
 def build_indicators(df):
     close = df["Close"].squeeze()
@@ -295,9 +332,14 @@ if analyze_btn and ticker_input:
         df, company_name = fetch_data(ticker, period)
 
     if df is None or df.empty:
-        st.error(f"「{ticker}」のデータが取得できませんでした。\n\n"
-                 "・銘柄コードを確認してください（日本株は末尾に `.T` が必要です）\n"
-                 "・時間をおいて再度お試しください")
+        st.error(
+            f"「{ticker}」のデータが取得できませんでした。\n\n"
+            "考えられる原因：\n"
+            "- 銘柄コードが間違っている（日本株は末尾に `.T` が必要です）\n"
+            "- Yahoo Finance側の一時的な障害\n"
+            "- ネットワークの問題\n\n"
+            "少し時間をおいて再度お試しください。"
+        )
         st.stop()
 
     ind, series = build_indicators(df)
