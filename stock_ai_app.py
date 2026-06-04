@@ -46,6 +46,31 @@ def add_to_history(ticker, company_name, ind, result_text):
     history = history[:30]  # 最新30件を保持
     save_history(history)
 
+# ─── ウォッチリスト ───────────────────────────────────────────────
+WATCHLIST_FILE = Path("watchlist.json")
+
+def load_watchlist():
+    if WATCHLIST_FILE.exists():
+        try:
+            with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    # 初回起動時のデフォルト（config.jsonの銘柄を使う）
+    try:
+        with open("config.json", "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+            return [{"ticker": t, "label": t} for t in cfg.get("tickers", [])]
+    except Exception:
+        return []
+
+def save_watchlist(watchlist):
+    try:
+        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
+            json.dump(watchlist, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
 # ─── テクニカル指標の計算 ─────────────────────────────────────────
 def calc_ma(close, window):
     return close.rolling(window).mean()
@@ -365,6 +390,49 @@ with st.sidebar:
     )
     period = st.selectbox("取得期間", ["3mo", "6mo", "1y", "2y"], index=1)
     st.markdown("---")
+
+    # ─── 注目リスト ───────────────────────────────────────────────
+    st.markdown("**⭐ 注目リスト**")
+    watchlist = load_watchlist()
+
+    # 登録済み銘柄のボタン表示
+    if not watchlist:
+        st.caption("まだ銘柄が登録されていません")
+    else:
+        for i, item in enumerate(watchlist):
+            col_btn_w, col_del = st.columns([4, 1])
+            with col_btn_w:
+                label = item.get("label") or item["ticker"]
+                if st.button(f"📊 {label}　({item['ticker']})", key=f"wl_{i}", use_container_width=True):
+                    st.session_state["watchlist_trigger"] = item["ticker"]
+            with col_del:
+                if st.button("✕", key=f"del_{i}", help="リストから削除"):
+                    watchlist.pop(i)
+                    save_watchlist(watchlist)
+                    st.rerun()
+
+    # 銘柄追加フォーム
+    st.markdown("")
+    with st.expander("＋ 銘柄を追加"):
+        new_ticker = st.text_input("銘柄コード", placeholder="例: 7203.T / AAPL", key="wl_new_ticker")
+        new_label  = st.text_input("表示名（省略可）", placeholder="例: トヨタ", key="wl_new_label")
+        if st.button("追加する", key="wl_add", use_container_width=True):
+            t = new_ticker.strip().upper()
+            if t:
+                # 重複チェック
+                if any(w["ticker"] == t for w in watchlist):
+                    st.warning("すでに登録されています")
+                elif len(watchlist) >= 10:
+                    st.warning("登録できるのは最大10銘柄です")
+                else:
+                    watchlist.append({"ticker": t, "label": new_label.strip() or t})
+                    save_watchlist(watchlist)
+                    st.success(f"{t} を追加しました")
+                    st.rerun()
+            else:
+                st.warning("銘柄コードを入力してください")
+
+    st.markdown("---")
     st.markdown("**銘柄コード例**")
     st.markdown("🇯🇵 トヨタ: `7203.T`")
     st.markdown("🇯🇵 ソフトバンク: `9984.T`")
@@ -403,6 +471,11 @@ with col_input:
     ticker_input = st.text_input("銘柄コードを入力", placeholder="例: 7203.T / AAPL / 9984.T", label_visibility="collapsed")
 with col_btn:
     analyze_btn = st.button("🔍 分析する", use_container_width=True, type="primary")
+
+# ウォッチリストのボタンが押されたときは、そのtickerで即分析
+if "watchlist_trigger" in st.session_state and st.session_state["watchlist_trigger"]:
+    ticker_input = st.session_state.pop("watchlist_trigger")
+    analyze_btn = True
 
 if analyze_btn and ticker_input:
     ticker = ticker_input.strip().upper()
