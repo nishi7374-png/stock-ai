@@ -70,6 +70,38 @@ def calc_bollinger(close, window=20, num_std=2):
     std = close.rolling(window).std()
     return mid + num_std * std, mid, mid - num_std * std
 
+# ▼▼▼ 追加①：ATR（Average True Range）の計算 ▼▼▼
+def calc_atr(df, period=14):
+    """
+    真の値幅（True Range）の平均。
+    True Range = max(高値-安値, |高値-前日終値|, |安値-前日終値|) の3つの中で最大のもの
+    """
+    high = df["High"].squeeze()
+    low  = df["Low"].squeeze()
+    close_prev = df["Close"].squeeze().shift(1)
+    tr = pd.concat([
+        high - low,
+        (high - close_prev).abs(),
+        (low  - close_prev).abs(),
+    ], axis=1).max(axis=1)
+    return tr.rolling(period).mean()
+
+# ▼▼▼ 追加②：ストキャスティクス（Stochastics）の計算 ▼▼▼
+def calc_stochastics(df, k_period=14, d_period=3):
+    """
+    %K = (現在値 - n日最安値) / (n日最高値 - n日最安値) × 100
+    %D = %K の3日移動平均（シグナルライン）
+    """
+    high  = df["High"].squeeze()
+    low   = df["Low"].squeeze()
+    close = df["Close"].squeeze()
+    lowest_low   = low.rolling(k_period).min()
+    highest_high = high.rolling(k_period).max()
+    k = (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan) * 100
+    d = k.rolling(d_period).mean()
+    return k, d
+# ▲▲▲ 追加ここまで ▲▲▲
+
 @st.cache_data(ttl=300)
 def fetch_data(ticker: str, period: str = "6mo"):
     """
@@ -128,6 +160,11 @@ def build_indicators(df):
     macd_line, signal_line, histogram = calc_macd(close)
     bb_upper, bb_mid, bb_lower = calc_bollinger(close)
 
+    # ▼▼▼ 追加③：ATR・ストキャスティクスの計算呼び出し ▼▼▼
+    atr = calc_atr(df)
+    stoch_k, stoch_d = calc_stochastics(df)
+    # ▲▲▲ 追加ここまで ▲▲▲
+
     latest = {
         "price":      float(close.iloc[-1]),
         "prev_price": float(close.iloc[-2]),
@@ -144,13 +181,24 @@ def build_indicators(df):
         "bb_upper":   float(bb_upper.iloc[-1]),
         "bb_mid":     float(bb_mid.iloc[-1]),
         "bb_lower":   float(bb_lower.iloc[-1]),
+        # ▼▼▼ 追加④：最新値をlatestに追加 ▼▼▼
+        "atr":        float(atr.iloc[-1]),
+        "stoch_k":    float(stoch_k.iloc[-1]),
+        "stoch_d":    float(stoch_d.iloc[-1]),
+        # ▲▲▲ 追加ここまで ▲▲▲
     }
     latest["change_pct"] = (latest["price"] - latest["prev_price"]) / latest["prev_price"] * 100
+    # ATRを使った損切り目安（現在値 ± 1.5倍ATR）
+    latest["stop_loss_buy"]  = latest["price"] - 1.5 * latest["atr"]
+    latest["stop_loss_sell"] = latest["price"] + 1.5 * latest["atr"]
 
     series = {
         "close": close, "ma5": ma5, "ma25": ma25, "ma75": ma75,
         "rsi": rsi, "macd_line": macd_line, "signal_line": signal_line,
         "histogram": histogram, "bb_upper": bb_upper, "bb_mid": bb_mid, "bb_lower": bb_lower,
+        # ▼▼▼ 追加⑤：seriesにも追加（グラフ描画用） ▼▼▼
+        "atr": atr, "stoch_k": stoch_k, "stoch_d": stoch_d,
+        # ▲▲▲ 追加ここまで ▲▲▲
     }
     return latest, series
 
@@ -239,6 +287,39 @@ def draw_volume(df):
     )
     return fig
 
+# ▼▼▼ 追加⑥：ストキャスティクスのグラフ描画関数 ▼▼▼
+def draw_stochastics(series):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=series["stoch_k"].index, y=series["stoch_k"],
+                             name="%K", line=dict(color="#60a5fa", width=2)))
+    fig.add_trace(go.Scatter(x=series["stoch_d"].index, y=series["stoch_d"],
+                             name="%D（シグナル）", line=dict(color="#fbbf24", width=1.5, dash="dash")))
+    fig.add_hline(y=80, line_dash="dot", line_color="#f87171", annotation_text="買われすぎ80")
+    fig.add_hline(y=20, line_dash="dot", line_color="#4ade80", annotation_text="売られすぎ20")
+    fig.update_layout(
+        template="plotly_dark",
+        height=180,
+        margin=dict(l=10, r=10, t=20, b=10),
+        yaxis=dict(range=[0, 100]),
+        xaxis=dict(tickformat="%m/%d"),
+    )
+    return fig
+
+def draw_atr(series):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=series["atr"].index, y=series["atr"],
+                             name="ATR(14)", line=dict(color="#a78bfa", width=2),
+                             fill="tozeroy", fillcolor="rgba(167,139,250,0.1)"))
+    fig.update_layout(
+        template="plotly_dark",
+        height=180,
+        margin=dict(l=10, r=10, t=20, b=10),
+        xaxis=dict(tickformat="%m/%d"),
+        yaxis=dict(title="値幅"),
+    )
+    return fig
+# ▲▲▲ 追加ここまで ▲▲▲
+
 # ─── Claude AI分析 ────────────────────────────────────────────────
 def ask_claude_stream(client, ticker, company_name, ind):
     prompt = f"""あなたは株式テクニカルアナリストです。以下の指標をもとに、プロの視点で売買判断を日本語で述べてください。
@@ -250,12 +331,14 @@ def ask_claude_stream(client, ticker, company_name, ind):
 【MACD】ライン={ind['macd']:.3f} / シグナル={ind['macd_sig']:.3f} / ヒスト={ind['macd_hist']:.3f}（前日={ind['macd_prev']:.3f}）
 【ボリンジャーバンド】上限={ind['bb_upper']:.2f} / 中央={ind['bb_mid']:.2f} / 下限={ind['bb_lower']:.2f}
 【出来高】直近={ind['volume']:.0f} / 5日平均={ind['volume_ma5']:.0f}
+【ATR(14)】{ind['atr']:.2f}　※ATRベースの損切り目安：買いポジ={ind['stop_loss_buy']:.2f} / 売りポジ={ind['stop_loss_sell']:.2f}
+【ストキャスティクス(14,3)】%K={ind['stoch_k']:.1f} / %D={ind['stoch_d']:.1f}
 
 以下の構成で回答してください：
 1. **総合判断**：「🟢 買い」「🔴 売り」「⚪ 様子見」のいずれかと確信度（高/中/低）
 2. **根拠**：各指標が示すシグナルの解説（箇条書き）
 3. **注目ポイント**：特に重要な指標や水準
-4. **アドバイス**：具体的な行動提案（エントリー・利確・損切りの目安など）
+4. **アドバイス**：具体的な行動提案（エントリー・利確・ATRを使った損切りの目安など）
 5. **リスク**：注意すべきリスク要因
 
 ※ 投資判断はあくまで参考情報です。"""
@@ -346,12 +429,17 @@ if analyze_btn and ticker_input:
 
     st.markdown("---")
     change_color = "normal" if ind["change_pct"] >= 0 else "inverse"
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("現在値", f"{ind['price']:,.2f}", f"{ind['change_pct']:+.2f}%", delta_color=change_color)
-    c2.metric("MA5",  f"{ind['ma5']:,.2f}")
-    c3.metric("MA25", f"{ind['ma25']:,.2f}")
-    c4.metric("RSI",  f"{ind['rsi']:.1f}")
+
+    # ▼▼▼ 追加⑦：メトリクス表示にATR・ストキャスティクスを追加 ▼▼▼
+    c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
+    c1.metric("現在値",     f"{ind['price']:,.2f}",   f"{ind['change_pct']:+.2f}%", delta_color=change_color)
+    c2.metric("MA5",        f"{ind['ma5']:,.2f}")
+    c3.metric("MA25",       f"{ind['ma25']:,.2f}")
+    c4.metric("RSI",        f"{ind['rsi']:.1f}")
     c5.metric("MACDヒスト", f"{ind['macd_hist']:.3f}")
+    c6.metric("ATR(14)",    f"{ind['atr']:.2f}", help="値動きの平均的な幅。大きいほどボラティリティが高い")
+    c7.metric("ストキャス%K", f"{ind['stoch_k']:.1f}", f"%D {ind['stoch_d']:.1f}")
+    # ▲▲▲ 追加ここまで ▲▲▲
 
     st.plotly_chart(draw_chart(df, series, ticker, company_name), use_container_width=True)
 
@@ -363,8 +451,27 @@ if analyze_btn and ticker_input:
         st.caption("MACD (12-26-9)")
         st.plotly_chart(draw_macd(series), use_container_width=True)
 
+    # ▼▼▼ 追加⑧：ストキャスティクス・ATRのグラフを追加 ▼▼▼
+    col_stoch, col_atr = st.columns(2)
+    with col_stoch:
+        st.caption("ストキャスティクス (14, 3) ― 青=%K　黄点線=%D")
+        st.plotly_chart(draw_stochastics(series), use_container_width=True)
+    with col_atr:
+        st.caption("ATR (14日) ― 値動きのボラティリティ")
+        st.plotly_chart(draw_atr(series), use_container_width=True)
+    # ▲▲▲ 追加ここまで ▲▲▲
+
     st.caption("出来高")
     st.plotly_chart(draw_volume(df), use_container_width=True)
+
+    # ▼▼▼ 追加⑨：ATRベースの損切り目安をUI表示 ▼▼▼
+    st.info(
+        f"📐 **ATRベースの損切り目安**　"
+        f"買いポジション保有中の場合: **{ind['stop_loss_buy']:,.2f}** 以下で損切り　／　"
+        f"売りポジション保有中の場合: **{ind['stop_loss_sell']:,.2f}** 以上で損切り　"
+        f"（現在値 ± ATR×1.5）"
+    )
+    # ▲▲▲ 追加ここまで ▲▲▲
 
     st.markdown("---")
     st.subheader(f"🤖 テクニカル分析レポート：{ticker}（{company_name}）")
