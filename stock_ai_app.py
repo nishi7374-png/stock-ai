@@ -1,5 +1,6 @@
 """
-株式テクニカル分析 × Claude AI判断 - Streamlitアプリ（スクリーニング機能付き）
+株式テクニカル分析 × Claude AI判断 - Streamlitアプリ
+（スクリーニング・アラート・前日比較機能付き）
 """
 
 import os
@@ -13,62 +14,95 @@ import yfinance as yf
 import plotly.graph_objects as go
 from anthropic import Anthropic
 
-# ─── 履歴ファイルのパス ───────────────────────────────────────────
-HISTORY_FILE = Path("analysis_history.json")
+# ─── ファイルパス ─────────────────────────────────────────────────
+HISTORY_FILE    = Path("analysis_history.json")
+WATCHLIST_FILE  = Path("watchlist.json")
+SCAN_TODAY_FILE = Path("scan_today.json")
+SCAN_PREV_FILE  = Path("scan_prev.json")
 
+# ─── アラート設定 ─────────────────────────────────────────────────
+ALERT_SCORE     = 6   # このスコア以上をアラート対象
+ALERT_TOP_N     = 3   # アラートで表示する件数
+COMPARE_TOP_N   = 5   # 前日比較で表示する件数
+
+# ─── 履歴 ─────────────────────────────────────────────────────────
 def load_history():
     if HISTORY_FILE.exists():
         try:
-            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            return json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
         except Exception:
             return []
     return []
 
 def save_history(history):
-    try:
-        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    HISTORY_FILE.write_text(json.dumps(history, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def add_to_history(ticker, company_name, ind, result_text):
     history = load_history()
     history.insert(0, {
-        "date": pd.Timestamp.now().strftime("%Y/%m/%d %H:%M"),
-        "ticker": ticker,
+        "date":         pd.Timestamp.now().strftime("%Y/%m/%d %H:%M"),
+        "ticker":       ticker,
         "company_name": company_name,
-        "price": ind["price"],
-        "change_pct": ind["change_pct"],
-        "rsi": ind["rsi"],
-        "result": result_text,
+        "price":        ind["price"],
+        "change_pct":   ind["change_pct"],
+        "rsi":          ind["rsi"],
+        "result":       result_text,
     })
-    history = history[:30]
-    save_history(history)
+    save_history(history[:30])
 
 # ─── ウォッチリスト ───────────────────────────────────────────────
-WATCHLIST_FILE = Path("watchlist.json")
-
 def load_watchlist():
     if WATCHLIST_FILE.exists():
         try:
-            with open(WATCHLIST_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            return json.loads(WATCHLIST_FILE.read_text(encoding="utf-8"))
         except Exception:
             return []
     try:
-        with open("config.json", "r", encoding="utf-8") as f:
-            cfg = json.load(f)
-            return [{"ticker": t, "label": t} for t in cfg.get("tickers", [])]
+        cfg = json.loads(Path("config.json").read_text(encoding="utf-8"))
+        return [{"ticker": t, "label": t} for t in cfg.get("tickers", [])]
     except Exception:
         return []
 
 def save_watchlist(watchlist):
-    try:
-        with open(WATCHLIST_FILE, "w", encoding="utf-8") as f:
-            json.dump(watchlist, f, ensure_ascii=False, indent=2)
-    except Exception:
-        pass
+    WATCHLIST_FILE.write_text(json.dumps(watchlist, ensure_ascii=False, indent=2), encoding="utf-8")
+
+# ─── スキャン結果の読み込み ───────────────────────────────────────
+def load_scan(path: Path):
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    return None
+
+# ─── アラートチェック ─────────────────────────────────────────────
+def get_alert_stocks():
+    """スコアがALERT_SCORE以上の上位ALERT_TOP_N銘柄を返す"""
+    scan = load_scan(SCAN_TODAY_FILE)
+    if not scan:
+        return [], None
+    hits = [r for r in scan["results"] if r["score"] >= ALERT_SCORE]
+    return hits[:ALERT_TOP_N], scan["scanned_at"]
+
+# ─── 前日比較 ─────────────────────────────────────────────────────
+def get_score_changes():
+    """スコアが前日から最も大きく上昇した上位COMPARE_TOP_N銘柄を返す"""
+    today = load_scan(SCAN_TODAY_FILE)
+    prev  = load_scan(SCAN_PREV_FILE)
+    if not today or not prev:
+        return [], None, None
+
+    prev_map = {r["ticker"]: r["score"] for r in prev["results"]}
+    changes = []
+    for r in today["results"]:
+        prev_score = prev_map.get(r["ticker"])
+        if prev_score is not None:
+            diff = r["score"] - prev_score
+            if diff > 0:  # 上昇した銘柄だけ
+                changes.append({**r, "prev_score": prev_score, "diff": diff})
+
+    changes.sort(key=lambda x: x["diff"], reverse=True)
+    return changes[:COMPARE_TOP_N], today["scanned_at"], prev["scanned_at"]
 
 # ─── テクニカル指標の計算 ─────────────────────────────────────────
 def calc_ma(close, window):
@@ -76,17 +110,17 @@ def calc_ma(close, window):
 
 def calc_rsi(close, period=14):
     delta = close.diff()
-    gain = delta.clip(lower=0).rolling(period).mean()
-    loss = (-delta.clip(upper=0)).rolling(period).mean()
-    rs = gain / loss.replace(0, np.nan)
+    gain  = delta.clip(lower=0).rolling(period).mean()
+    loss  = (-delta.clip(upper=0)).rolling(period).mean()
+    rs    = gain / loss.replace(0, np.nan)
     return 100 - (100 / (1 + rs))
 
 def calc_macd(close, fast=12, slow=26, signal=9):
-    ema_fast = close.ewm(span=fast, adjust=False).mean()
-    ema_slow = close.ewm(span=slow, adjust=False).mean()
-    macd_line = ema_fast - ema_slow
+    ema_fast    = close.ewm(span=fast, adjust=False).mean()
+    ema_slow    = close.ewm(span=slow, adjust=False).mean()
+    macd_line   = ema_fast - ema_slow
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram = macd_line - signal_line
+    histogram   = macd_line - signal_line
     return macd_line, signal_line, histogram
 
 def calc_bollinger(close, window=20, num_std=2):
@@ -95,8 +129,8 @@ def calc_bollinger(close, window=20, num_std=2):
     return mid + num_std * std, mid, mid - num_std * std
 
 def calc_atr(df, period=14):
-    high = df["High"].squeeze()
-    low  = df["Low"].squeeze()
+    high       = df["High"].squeeze()
+    low        = df["Low"].squeeze()
     close_prev = df["Close"].squeeze().shift(1)
     tr = pd.concat([
         high - low,
@@ -106,9 +140,9 @@ def calc_atr(df, period=14):
     return tr.rolling(period).mean()
 
 def calc_stochastics(df, k_period=14, d_period=3):
-    high  = df["High"].squeeze()
-    low   = df["Low"].squeeze()
-    close = df["Close"].squeeze()
+    high         = df["High"].squeeze()
+    low          = df["Low"].squeeze()
+    close        = df["Close"].squeeze()
     lowest_low   = low.rolling(k_period).min()
     highest_high = high.rolling(k_period).max()
     k = (close - lowest_low) / (highest_high - lowest_low).replace(0, np.nan) * 100
@@ -120,8 +154,8 @@ def fetch_data(ticker: str, period: str = "6mo"):
     last_error = None
     for attempt in range(3):
         try:
-            tk = yf.Ticker(ticker)
-            df = tk.history(period=period, auto_adjust=True)
+            tk  = yf.Ticker(ticker)
+            df  = tk.history(period=period, auto_adjust=True)
             if isinstance(df.columns, pd.MultiIndex):
                 df.columns = df.columns.get_level_values(0)
             if df.index.tz is not None:
@@ -140,12 +174,10 @@ def fetch_data(ticker: str, period: str = "6mo"):
             return df, name
         except Exception as e:
             last_error = e
-            wait = 2 * (attempt + 1)
             if attempt < 2:
-                time.sleep(wait)
+                time.sleep(2 * (attempt + 1))
     st.error(f"データ取得に失敗しました（最終エラー: {last_error}）")
     return None, ticker
-
 
 def build_indicators(df):
     close = df["Close"].squeeze()
@@ -153,7 +185,7 @@ def build_indicators(df):
     rsi = calc_rsi(close)
     macd_line, signal_line, histogram = calc_macd(close)
     bb_upper, bb_mid, bb_lower = calc_bollinger(close)
-    atr = calc_atr(df)
+    atr    = calc_atr(df)
     stoch_k, stoch_d = calc_stochastics(df)
 
     latest = {
@@ -176,9 +208,9 @@ def build_indicators(df):
         "stoch_k":    float(stoch_k.iloc[-1]),
         "stoch_d":    float(stoch_d.iloc[-1]),
     }
-    latest["change_pct"] = (latest["price"] - latest["prev_price"]) / latest["prev_price"] * 100
-    latest["stop_loss_buy"]  = latest["price"] - 1.5 * latest["atr"]
-    latest["stop_loss_sell"] = latest["price"] + 1.5 * latest["atr"]
+    latest["change_pct"]      = (latest["price"] - latest["prev_price"]) / latest["prev_price"] * 100
+    latest["stop_loss_buy"]   = latest["price"] - 1.5 * latest["atr"]
+    latest["stop_loss_sell"]  = latest["price"] + 1.5 * latest["atr"]
 
     series = {
         "close": close, "ma5": ma5, "ma25": ma25, "ma75": ma75,
@@ -188,115 +220,62 @@ def build_indicators(df):
     }
     return latest, series
 
-# ─── スクリーニング ───────────────────────────────────────────────
-
+# ─── スクリーニング（手動実行用） ────────────────────────────────
 def score_signals(ind):
-    """
-    各テクニカル指標を点数化して買いシグナルの強さを返す。
-    各条件を満たすごとに1点加算。最大8点。
-    """
     signals = []
-    score = 0
-
-    # ① RSIが30〜50（売られすぎ圏から回復中）
+    score   = 0
     if 30 <= ind["rsi"] <= 50:
-        score += 1
-        signals.append(("✅", "RSI回復中", f"RSI={ind['rsi']:.1f}（売られすぎ圏から反発）"))
+        score += 1; signals.append(("✅", "RSI回復中",          f"RSI={ind['rsi']:.1f}"))
     elif ind["rsi"] < 30:
-        score += 0.5
-        signals.append(("⚠️", "RSI売られすぎ", f"RSI={ind['rsi']:.1f}（売られすぎ水準）"))
-
-    # ② MACDヒストグラムが前日よりプラス方向に改善
+        score += 0.5; signals.append(("⚠️", "RSI売られすぎ",   f"RSI={ind['rsi']:.1f}"))
     if ind["macd_hist"] > ind["macd_prev"]:
-        score += 1
-        signals.append(("✅", "MACD改善", f"ヒスト={ind['macd_hist']:.3f}（前日{ind['macd_prev']:.3f}から改善）"))
-
-    # ③ MACDラインがシグナルを上抜け（ゴールデンクロス）
+        score += 1; signals.append(("✅", "MACD改善",           f"ヒスト={ind['macd_hist']:.3f}"))
     if ind["macd"] > ind["macd_sig"]:
-        score += 1
-        signals.append(("✅", "MACDゴールデンクロス", f"MACD={ind['macd']:.3f} > Signal={ind['macd_sig']:.3f}"))
-
-    # ④ 現在値がMA25を上回っている（上昇トレンド）
+        score += 1; signals.append(("✅", "MACDゴールデンクロス", ""))
     if ind["price"] > ind["ma25"]:
-        score += 1
-        signals.append(("✅", "MA25上抜け", f"現在値{ind['price']:.2f} > MA25={ind['ma25']:.2f}"))
-
-    # ⑤ MA5がMA25を上回っている（短期が中期を上抜け）
+        score += 1; signals.append(("✅", "MA25上抜け",         f"{ind['price']:.2f}>{ind['ma25']:.2f}"))
     if ind["ma5"] > ind["ma25"]:
-        score += 1
-        signals.append(("✅", "短期MA上昇", f"MA5={ind['ma5']:.2f} > MA25={ind['ma25']:.2f}"))
-
-    # ⑥ ストキャスティクス %Kが%Dを上回り、かつ20〜80の範囲
+        score += 1; signals.append(("✅", "短期MA上昇",         ""))
     if ind["stoch_k"] > ind["stoch_d"] and 20 <= ind["stoch_k"] <= 80:
-        score += 1
-        signals.append(("✅", "ストキャス上昇", f"%K={ind['stoch_k']:.1f} > %D={ind['stoch_d']:.1f}"))
-
-    # ⑦ 出来高が5日平均を上回る（勢いあり）
+        score += 1; signals.append(("✅", "ストキャス上昇",     f"%K={ind['stoch_k']:.1f}"))
     if ind["volume"] > ind["volume_ma5"]:
-        score += 1
-        signals.append(("✅", "出来高増加", f"直近出来高が5日平均を上回る"))
-
-    # ⑧ ボリンジャーバンド下限付近（下値サポート）
+        score += 1; signals.append(("✅", "出来高増加",         ""))
     bb_range = ind["bb_upper"] - ind["bb_lower"]
-    if bb_range > 0:
-        bb_pos = (ind["price"] - ind["bb_lower"]) / bb_range
-        if bb_pos < 0.3:
-            score += 1
-            signals.append(("✅", "BB下限付近", f"ボリンジャーバンド下限に近い（反発期待）"))
-
+    if bb_range > 0 and (ind["price"] - ind["bb_lower"]) / bb_range < 0.3:
+        score += 1; signals.append(("✅", "BB下限付近",         ""))
     return score, signals
 
-
 def run_screening(watchlist, period="6mo"):
-    """
-    ウォッチリスト全銘柄をスキャンしてスコア順に並べた結果を返す。
-    """
-    results = []
+    results  = []
     progress = st.progress(0, text="スキャン中...")
-    total = len(watchlist)
-
+    total    = len(watchlist)
     for i, item in enumerate(watchlist):
         ticker = item["ticker"]
         label  = item.get("label") or ticker
         progress.progress((i + 1) / total, text=f"スキャン中… {label}（{ticker}）")
-
         df, company_name = fetch_data(ticker, period)
         if df is None or df.empty:
-            results.append({
-                "ticker": ticker, "label": label, "company_name": company_name,
-                "score": -1, "signals": [], "ind": None, "error": True,
-            })
+            results.append({"ticker": ticker, "label": label, "company_name": company_name,
+                            "score": -1, "signals": [], "ind": None, "error": True})
             continue
-
         ind, _ = build_indicators(df)
         score, signals = score_signals(ind)
-        results.append({
-            "ticker": ticker, "label": label, "company_name": company_name,
-            "score": score, "signals": signals, "ind": ind, "error": False,
-        })
-
+        results.append({"ticker": ticker, "label": label, "company_name": company_name,
+                        "score": score, "signals": signals, "ind": ind, "error": False})
     progress.empty()
-    # スコア降順でソート
     results.sort(key=lambda x: x["score"], reverse=True)
     return results
 
-
 def ask_claude_screening(client, candidates):
-    """
-    スクリーニング上位銘柄をまとめてClaudeに渡し、総評を得る。
-    """
     lines = []
     for r in candidates:
-        ind = r["ind"]
+        ind      = r["ind"]
         sig_text = "、".join([s[1] for s in r["signals"]])
         lines.append(
-            f"・{r['ticker']}（{r['company_name']}）"
-            f" スコア{r['score']}/8　"
+            f"・{r['ticker']}（{r['company_name']}）スコア{r['score']}/8　"
             f"現在値={ind['price']:,.2f}（{ind['change_pct']:+.2f}%）　"
-            f"RSI={ind['rsi']:.1f}　MACD_hist={ind['macd_hist']:.3f}　"
-            f"シグナル: {sig_text}"
+            f"RSI={ind['rsi']:.1f}　MACD_hist={ind['macd_hist']:.3f}　シグナル: {sig_text}"
         )
-
     prompt = f"""あなたは株式テクニカルアナリストです。
 以下はテクニカルスクリーニングで選ばれた買い候補銘柄の一覧です（スコア高い順）。
 各銘柄を比較し、特に注目すべき銘柄とその理由を日本語で解説してください。
@@ -311,7 +290,6 @@ def ask_claude_screening(client, candidates):
 4. **注意点**：スクリーニング結果を使う上でのリスク
 
 ※投資判断はあくまで参考情報です。"""
-
     with client.messages.stream(
         model="claude-sonnet-4-5",
         max_tokens=1200,
@@ -324,18 +302,13 @@ def ask_claude_screening(client, candidates):
 def draw_chart(df, series, ticker, company_name):
     close = series["close"]
     dates = close.index
-    fig = go.Figure()
+    fig   = go.Figure()
     fig.add_trace(go.Candlestick(
-        x=df.index,
-        open=df["Open"].squeeze(),
-        high=df["High"].squeeze(),
-        low=df["Low"].squeeze(),
-        close=df["Close"].squeeze(),
-        name="株価",
-        increasing_line_color="#4ade80",
-        decreasing_line_color="#f87171",
+        x=df.index, open=df["Open"].squeeze(), high=df["High"].squeeze(),
+        low=df["Low"].squeeze(), close=df["Close"].squeeze(), name="株価",
+        increasing_line_color="#4ade80", decreasing_line_color="#f87171",
     ))
-    for label, col, color in [("MA5", "ma5", "#60a5fa"), ("MA25", "ma25", "#fbbf24"), ("MA75", "ma75", "#c084fc")]:
+    for label, col, color in [("MA5","ma5","#60a5fa"),("MA25","ma25","#fbbf24"),("MA75","ma75","#c084fc")]:
         fig.add_trace(go.Scatter(x=dates, y=series[col], name=label, line=dict(color=color, width=1.2)))
     fig.add_trace(go.Scatter(x=dates, y=series["bb_upper"], name="BB上限",
                              line=dict(color="#94a3b8", width=1, dash="dot")))
@@ -346,8 +319,7 @@ def draw_chart(df, series, ticker, company_name):
         title=f"{ticker}（{company_name}） 株価チャート",
         xaxis_rangeslider_visible=False,
         xaxis=dict(tickformat="%m/%d", dtick="M1"),
-        template="plotly_dark",
-        height=420,
+        template="plotly_dark", height=420,
         margin=dict(l=10, r=10, t=40, b=10),
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
     )
@@ -359,13 +331,12 @@ def draw_rsi(series):
                              name="RSI", line=dict(color="#60a5fa", width=2)))
     fig.add_hline(y=70, line_dash="dot", line_color="#f87171", annotation_text="買われすぎ70")
     fig.add_hline(y=30, line_dash="dot", line_color="#4ade80", annotation_text="売られすぎ30")
-    fig.update_layout(template="plotly_dark", height=180,
-                      margin=dict(l=10, r=10, t=20, b=10),
-                      yaxis=dict(range=[0, 100]), xaxis=dict(tickformat="%m/%d"))
+    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10,r=10,t=20,b=10),
+                      yaxis=dict(range=[0,100]), xaxis=dict(tickformat="%m/%d"))
     return fig
 
 def draw_macd(series):
-    fig = go.Figure()
+    fig    = go.Figure()
     colors = ["#4ade80" if v >= 0 else "#f87171" for v in series["histogram"]]
     fig.add_trace(go.Bar(x=series["histogram"].index, y=series["histogram"],
                          name="ヒストグラム", marker_color=colors, opacity=0.7))
@@ -373,8 +344,8 @@ def draw_macd(series):
                              name="MACD", line=dict(color="#60a5fa", width=1.5)))
     fig.add_trace(go.Scatter(x=series["signal_line"].index, y=series["signal_line"],
                              name="Signal", line=dict(color="#fbbf24", width=1.5)))
-    fig.update_layout(template="plotly_dark", height=180,
-                      margin=dict(l=10, r=10, t=20, b=10), xaxis=dict(tickformat="%m/%d"))
+    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10,r=10,t=20,b=10),
+                      xaxis=dict(tickformat="%m/%d"))
     return fig
 
 def draw_volume(df):
@@ -383,8 +354,7 @@ def draw_volume(df):
     fig = go.Figure()
     fig.add_trace(go.Bar(x=df.index, y=df["Volume"].squeeze(),
                          name="出来高", marker_color=colors, opacity=0.8))
-    fig.update_layout(template="plotly_dark", height=180,
-                      margin=dict(l=10, r=10, t=20, b=10),
+    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10,r=10,t=20,b=10),
                       yaxis=dict(title="出来高"), xaxis=dict(tickformat="%m/%d"))
     return fig
 
@@ -396,9 +366,8 @@ def draw_stochastics(series):
                              name="%D（シグナル）", line=dict(color="#fbbf24", width=1.5, dash="dash")))
     fig.add_hline(y=80, line_dash="dot", line_color="#f87171", annotation_text="買われすぎ80")
     fig.add_hline(y=20, line_dash="dot", line_color="#4ade80", annotation_text="売られすぎ20")
-    fig.update_layout(template="plotly_dark", height=180,
-                      margin=dict(l=10, r=10, t=20, b=10),
-                      yaxis=dict(range=[0, 100]), xaxis=dict(tickformat="%m/%d"))
+    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10,r=10,t=20,b=10),
+                      yaxis=dict(range=[0,100]), xaxis=dict(tickformat="%m/%d"))
     return fig
 
 def draw_atr(series):
@@ -406,8 +375,7 @@ def draw_atr(series):
     fig.add_trace(go.Scatter(x=series["atr"].index, y=series["atr"],
                              name="ATR(14)", line=dict(color="#a78bfa", width=2),
                              fill="tozeroy", fillcolor="rgba(167,139,250,0.1)"))
-    fig.update_layout(template="plotly_dark", height=180,
-                      margin=dict(l=10, r=10, t=20, b=10),
+    fig.update_layout(template="plotly_dark", height=180, margin=dict(l=10,r=10,t=20,b=10),
                       xaxis=dict(tickformat="%m/%d"), yaxis=dict(title="値幅"))
     return fig
 
@@ -422,7 +390,7 @@ def ask_claude_stream(client, ticker, company_name, ind):
 【MACD】ライン={ind['macd']:.3f} / シグナル={ind['macd_sig']:.3f} / ヒスト={ind['macd_hist']:.3f}（前日={ind['macd_prev']:.3f}）
 【ボリンジャーバンド】上限={ind['bb_upper']:.2f} / 中央={ind['bb_mid']:.2f} / 下限={ind['bb_lower']:.2f}
 【出来高】直近={ind['volume']:.0f} / 5日平均={ind['volume_ma5']:.0f}
-【ATR(14)】{ind['atr']:.2f}　※ATRベースの損切り目安：買いポジ={ind['stop_loss_buy']:.2f} / 売りポジ={ind['stop_loss_sell']:.2f}
+【ATR(14)】{ind['atr']:.2f}　損切り目安：買い={ind['stop_loss_buy']:.2f} / 売り={ind['stop_loss_sell']:.2f}
 【ストキャスティクス(14,3)】%K={ind['stoch_k']:.1f} / %D={ind['stoch_d']:.1f}
 
 以下の構成で回答してください：
@@ -442,15 +410,16 @@ def ask_claude_stream(client, ticker, company_name, ind):
         for text in stream.text_stream:
             yield text
 
-# ─── ページ設定 ───────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# ページ設定
+# ══════════════════════════════════════════════════════════════════
 st.set_page_config(page_title="株式AI分析", page_icon="📈", layout="wide")
 
 # ─── サイドバー ───────────────────────────────────────────────────
 with st.sidebar:
     st.title("⚙️ 設定")
     api_key = st.text_input(
-        "Anthropic APIキー",
-        type="password",
+        "Anthropic APIキー", type="password",
         value=os.environ.get("ANTHROPIC_API_KEY", ""),
         help="https://console.anthropic.com で取得できます",
     )
@@ -459,7 +428,6 @@ with st.sidebar:
 
     st.markdown("**⭐ 注目リスト**")
     watchlist = load_watchlist()
-
     if not watchlist:
         st.caption("まだ銘柄が登録されていません")
     else:
@@ -475,7 +443,6 @@ with st.sidebar:
                     save_watchlist(watchlist)
                     st.rerun()
 
-    st.markdown("")
     with st.expander("＋ 銘柄を追加"):
         new_ticker = st.text_input("銘柄コード", placeholder="例: 7203.T / AAPL", key="wl_new_ticker")
         new_label  = st.text_input("表示名（省略可）", placeholder="例: トヨタ", key="wl_new_label")
@@ -499,7 +466,6 @@ with st.sidebar:
     st.markdown("🇯🇵 トヨタ: `7203.T`")
     st.markdown("🇯🇵 ソフトバンク: `9984.T`")
     st.markdown("🇺🇸 Apple: `AAPL`")
-    st.markdown("🇺🇸 NVIDIA: `NVDA`")
     st.markdown("---")
 
     st.markdown("**📋 分析履歴**")
@@ -510,38 +476,55 @@ with st.sidebar:
         if st.button("🗑️ 履歴を全削除", use_container_width=True):
             save_history([])
             st.rerun()
-        for i, h in enumerate(history):
+        for h in history:
             change_emoji = "🟢" if h["change_pct"] >= 0 else "🔴"
             company = h.get("company_name", h["ticker"])
-            label = f"{h['date']}  {h['ticker']}（{company}）  {change_emoji}"
-            with st.expander(label):
+            with st.expander(f"{h['date']}  {h['ticker']}（{company}）  {change_emoji}"):
                 st.caption(f"価格: {h['price']:,.2f}　前日比: {h['change_pct']:+.2f}%　RSI: {h['rsi']:.1f}")
                 st.markdown(h["result"])
 
     st.markdown("---")
     st.caption("⚠️ 投資は自己責任で。このツールは参考情報です。")
 
-# ─── メイン ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════
+# 🔔 アラートバナー（ページ最上部）
+# ══════════════════════════════════════════════════════════════════
 st.title("📈 株式テクニカル分析 × Claude AI")
+
+alert_stocks, scanned_at = get_alert_stocks()
+if alert_stocks:
+    names = "　".join([f"**{r['ticker']}**（{r['score']}点）" for r in alert_stocks])
+    st.error(
+        f"🔔 **本日のアラート** ─ スコア{ALERT_SCORE}点以上が {len(alert_stocks)} 銘柄あります！\n\n"
+        f"{names}\n\n"
+        f"スキャン時刻: {scanned_at}　／　詳細は「🎯 スクリーニング」タブへ",
+        icon="🚨",
+    )
+elif SCAN_TODAY_FILE.exists():
+    st.info("✅ 本日のスキャン済み。アラート対象銘柄はありませんでした。", icon="📭")
+else:
+    st.warning("⏳ 本日のスキャンデータがまだありません。GitHub Actions が毎朝5時に自動実行します。", icon="⏰")
+
 st.caption("リアルタイム株価データ × AIによる売買判断")
 
-# ─── タブ切り替え ─────────────────────────────────────────────────
+# ─── タブ ────────────────────────────────────────────────────────
 tab_single, tab_scan = st.tabs(["🔍 個別分析", "🎯 スクリーニング"])
 
 # ══════════════════════════════════════════════════════════════════
-# タブ①：個別分析（既存機能）
+# タブ①：個別分析
 # ══════════════════════════════════════════════════════════════════
 with tab_single:
     col_input, col_btn = st.columns([3, 1])
     with col_input:
-        ticker_input = st.text_input("銘柄コードを入力", placeholder="例: 7203.T / AAPL / 9984.T",
+        ticker_input = st.text_input("銘柄コードを入力",
+                                     placeholder="例: 7203.T / AAPL / 9984.T",
                                      label_visibility="collapsed", key="single_ticker")
     with col_btn:
         analyze_btn = st.button("🔍 分析する", use_container_width=True, type="primary", key="single_btn")
 
     if "watchlist_trigger" in st.session_state and st.session_state["watchlist_trigger"]:
         ticker_input = st.session_state.pop("watchlist_trigger")
-        analyze_btn = True
+        analyze_btn  = True
 
     if analyze_btn and ticker_input:
         ticker = ticker_input.strip().upper()
@@ -555,10 +538,7 @@ with tab_single:
         if df is None or df.empty:
             st.error(
                 f"「{ticker}」のデータが取得できませんでした。\n\n"
-                "考えられる原因：\n"
-                "- 銘柄コードが間違っている（日本株は末尾に `.T` が必要です）\n"
-                "- Yahoo Finance側の一時的な障害\n\n"
-                "少し時間をおいて再度お試しください。"
+                "銘柄コードを確認してください（日本株は末尾に `.T` が必要です）"
             )
             st.stop()
 
@@ -566,13 +546,13 @@ with tab_single:
         st.markdown("---")
         change_color = "normal" if ind["change_pct"] >= 0 else "inverse"
 
-        c1, c2, c3, c4, c5, c6, c7 = st.columns(7)
-        c1.metric("現在値",     f"{ind['price']:,.2f}",   f"{ind['change_pct']:+.2f}%", delta_color=change_color)
-        c2.metric("MA5",        f"{ind['ma5']:,.2f}")
-        c3.metric("MA25",       f"{ind['ma25']:,.2f}")
-        c4.metric("RSI",        f"{ind['rsi']:.1f}")
-        c5.metric("MACDヒスト", f"{ind['macd_hist']:.3f}")
-        c6.metric("ATR(14)",    f"{ind['atr']:.2f}")
+        c1,c2,c3,c4,c5,c6,c7 = st.columns(7)
+        c1.metric("現在値",       f"{ind['price']:,.2f}",   f"{ind['change_pct']:+.2f}%", delta_color=change_color)
+        c2.metric("MA5",          f"{ind['ma5']:,.2f}")
+        c3.metric("MA25",         f"{ind['ma25']:,.2f}")
+        c4.metric("RSI",          f"{ind['rsi']:.1f}")
+        c5.metric("MACDヒスト",   f"{ind['macd_hist']:.3f}")
+        c6.metric("ATR(14)",      f"{ind['atr']:.2f}")
         c7.metric("ストキャス%K", f"{ind['stoch_k']:.1f}", f"%D {ind['stoch_d']:.1f}")
 
         st.plotly_chart(draw_chart(df, series, ticker, company_name), use_container_width=True)
@@ -587,7 +567,7 @@ with tab_single:
 
         col_stoch, col_atr = st.columns(2)
         with col_stoch:
-            st.caption("ストキャスティクス (14, 3) ― 青=%K　黄点線=%D")
+            st.caption("ストキャスティクス (14, 3)")
             st.plotly_chart(draw_stochastics(series), use_container_width=True)
         with col_atr:
             st.caption("ATR (14日) ― 値動きのボラティリティ")
@@ -598,17 +578,15 @@ with tab_single:
 
         st.info(
             f"📐 **ATRベースの損切り目安**　"
-            f"買いポジション保有中の場合: **{ind['stop_loss_buy']:,.2f}** 以下で損切り　／　"
-            f"売りポジション保有中の場合: **{ind['stop_loss_sell']:,.2f}** 以上で損切り　"
-            f"（現在値 ± ATR×1.5）"
+            f"買いポジション: **{ind['stop_loss_buy']:,.2f}** 以下で損切り　／　"
+            f"売りポジション: **{ind['stop_loss_sell']:,.2f}** 以上で損切り"
         )
 
         st.markdown("---")
         st.subheader(f"🤖 テクニカル分析レポート：{ticker}（{company_name}）")
-
-        client = Anthropic(api_key=api_key)
+        client       = Anthropic(api_key=api_key)
         response_box = st.empty()
-        full_text = ""
+        full_text    = ""
         with st.spinner("Claude が分析中…"):
             for chunk in ask_claude_stream(client, ticker, company_name, ind):
                 full_text += chunk
@@ -616,84 +594,132 @@ with tab_single:
         response_box.markdown(full_text)
 
         add_to_history(ticker, company_name, ind, full_text)
-        st.success("✅ 分析結果を履歴に保存しました（サイドバーで確認できます）")
+        st.success("✅ 分析結果を履歴に保存しました")
 
     elif analyze_btn and not ticker_input:
         st.warning("銘柄コードを入力してください。")
 
 # ══════════════════════════════════════════════════════════════════
-# タブ②：スクリーニング（新機能）
+# タブ②：スクリーニング
 # ══════════════════════════════════════════════════════════════════
 with tab_scan:
-    st.subheader("🎯 ウォッチリスト スクリーニング")
-    st.caption("ウォッチリストの全銘柄をテクニカル指標でスキャンし、買いシグナルの強い順に並べます。")
+    st.subheader("🎯 スクリーニング結果")
+
+    # ── 自動スキャン結果（毎朝保存されたデータ）──────────────────
+    scan_today = load_scan(SCAN_TODAY_FILE)
+
+    if scan_today:
+        st.success(f"📅 最終スキャン: {scan_today['scanned_at']}　対象: {scan_today['total']}銘柄")
+
+        inner_tab1, inner_tab2 = st.tabs(["🔔 アラート（上位3銘柄）", "📊 前日比較（変化5銘柄）"])
+
+        # ── アラートタブ ─────────────────────────────────────────
+        with inner_tab1:
+            st.caption(f"スコア{ALERT_SCORE}点以上の上位{ALERT_TOP_N}銘柄を表示します")
+            if alert_stocks:
+                for r in alert_stocks:
+                    ind = r["ind"]
+                    with st.container(border=True):
+                        col_a, col_b, col_c, col_d = st.columns([3, 1, 1, 2])
+                        with col_a:
+                            st.markdown(f"### 🟢 {r['ticker']}")
+                            st.caption(r["company_name"])
+                        with col_b:
+                            st.metric("スコア", f"{r['score']}/8")
+                        with col_c:
+                            chg_color = "normal" if ind["change_pct"] >= 0 else "inverse"
+                            st.metric("現在値", f"{ind['price']:,.2f}",
+                                      f"{ind['change_pct']:+.2f}%", delta_color=chg_color)
+                        with col_d:
+                            for sig in r["signals"]:
+                                st.caption(f"✅ {sig}")
+                        if st.button(f"🔍 {r['ticker']} を詳細分析",
+                                     key=f"alert_detail_{r['ticker']}", use_container_width=True):
+                            st.session_state["watchlist_trigger"] = r["ticker"]
+                            st.rerun()
+            else:
+                st.info(f"本日はスコア{ALERT_SCORE}点以上の銘柄はありませんでした。")
+
+        # ── 前日比較タブ ─────────────────────────────────────────
+        with inner_tab2:
+            changes, today_at, prev_at = get_score_changes()
+            if changes:
+                st.caption(f"前回スキャンから最も上昇した{COMPARE_TOP_N}銘柄　（前回: {prev_at} → 今回: {today_at}）")
+                for r in changes:
+                    ind = r["ind"]
+                    with st.container(border=True):
+                        col_a, col_b, col_c, col_d = st.columns([3, 2, 1, 2])
+                        with col_a:
+                            st.markdown(f"### ⬆️ {r['ticker']}")
+                            st.caption(r["company_name"])
+                        with col_b:
+                            st.metric("スコア変化",
+                                      f"{r['score']}/8",
+                                      f"+{r['diff']} （前回 {r['prev_score']}点）")
+                        with col_c:
+                            chg_color = "normal" if ind["change_pct"] >= 0 else "inverse"
+                            st.metric("現在値", f"{ind['price']:,.2f}",
+                                      f"{ind['change_pct']:+.2f}%", delta_color=chg_color)
+                        with col_d:
+                            for sig in r["signals"]:
+                                st.caption(f"✅ {sig}")
+                        if st.button(f"🔍 {r['ticker']} を詳細分析",
+                                     key=f"cmp_detail_{r['ticker']}", use_container_width=True):
+                            st.session_state["watchlist_trigger"] = r["ticker"]
+                            st.rerun()
+            elif load_scan(SCAN_PREV_FILE):
+                st.info("前回からスコアが上昇した銘柄はありませんでした。")
+            else:
+                st.info("前回のスキャンデータがまだありません。2回目のスキャン後に比較できます。")
+
+    else:
+        st.warning("自動スキャンのデータがまだありません。GitHub Actions が毎朝5時に自動実行します。")
+
+    # ── 手動スキャン（ウォッチリストのみ） ───────────────────────
+    st.markdown("---")
+    st.subheader("🔄 今すぐスキャン（ウォッチリストのみ）")
+    st.caption("GitHub Actionsを待たずに、今すぐウォッチリストだけをスキャンできます。")
 
     watchlist_scan = load_watchlist()
-
     if not watchlist_scan:
         st.warning("ウォッチリストに銘柄が登録されていません。サイドバーから追加してください。")
     else:
-        # スコアの説明
-        with st.expander("📖 スコアの見方（タップして確認）"):
+        with st.expander("📖 スコアの見方"):
             st.markdown("""
-| スコア | 判定 | 内容 |
-|--------|------|------|
-| 6〜8点 | 🟢 強い買いシグナル | 複数の指標が同時に買いを示している |
-| 4〜5点 | 🟡 やや買い寄り | いくつかの指標が好転している |
-| 2〜3点 | ⚪ 中立 | 買いシグナルは弱い |
-| 0〜1点 | 🔴 シグナル弱 | 買い条件をほぼ満たしていない |
-
-**採点する8つの条件：**
-1. RSIが30〜50（売られすぎから回復中）
-2. MACDヒストグラムが前日比で改善
-3. MACDラインがシグナルを上抜け
-4. 現在値がMA25を上回っている
-5. MA5がMA25を上回っている（短期上昇）
-6. ストキャスティクス %Kが%Dを上回る
-7. 出来高が5日平均を超える
-8. ボリンジャーバンド下限付近（反発期待）
+| スコア | 判定 |
+|--------|------|
+| 6〜8点 | 🟢 強い買いシグナル |
+| 4〜5点 | 🟡 やや買い寄り |
+| 2〜3点 | ⚪ 中立 |
+| 0〜1点 | 🔴 シグナル弱 |
             """)
 
-        col_scan_opt1, col_scan_opt2 = st.columns([2, 1])
-        with col_scan_opt1:
-            min_score = st.slider("表示する最低スコア", min_value=0, max_value=8, value=3,
-                                  help="このスコア以上の銘柄だけ表示します")
-        with col_scan_opt2:
-            use_claude = st.checkbox("Claudeで上位銘柄を精密分析", value=True,
-                                     help="スコア上位の銘柄をClaudeがまとめて解説します（API使用）")
+        col_opt1, col_opt2 = st.columns([2, 1])
+        with col_opt1:
+            min_score = st.slider("表示する最低スコア", 0, 8, 3)
+        with col_opt2:
+            use_claude = st.checkbox("Claudeで精密分析", value=True,
+                                     help="スコア上位をClaudeが解説（API使用）")
 
-        scan_btn = st.button("🚀 スクリーニング開始", type="primary", use_container_width=True, key="scan_btn")
-
-        if scan_btn:
+        if st.button("🚀 今すぐスキャン", type="primary", use_container_width=True, key="manual_scan_btn"):
             if use_claude and not api_key:
-                st.error("Claudeでの分析にはAnthropicのAPIキーが必要です。サイドバーで入力してください。")
+                st.error("Claudeでの分析にはAPIキーが必要です。")
                 st.stop()
 
-            st.markdown("---")
-            results = run_screening(watchlist_scan, period)
-
-            # 結果テーブル
-            st.subheader("📊 スキャン結果（スコア高い順）")
-
+            results  = run_screening(watchlist_scan, period)
             filtered = [r for r in results if not r["error"] and r["score"] >= min_score]
             errors   = [r for r in results if r["error"]]
 
+            st.markdown("---")
+            st.subheader("📊 スキャン結果")
+
             if not filtered:
-                st.info(f"スコア{min_score}点以上の銘柄が見つかりませんでした。最低スコアを下げてみてください。")
+                st.info(f"スコア{min_score}点以上の銘柄が見つかりませんでした。")
             else:
                 for r in filtered:
                     score = r["score"]
-                    if score >= 6:
-                        badge = "🟢"
-                        label_color = "green"
-                    elif score >= 4:
-                        badge = "🟡"
-                        label_color = "orange"
-                    else:
-                        badge = "⚪"
-                        label_color = "gray"
-
-                    ind = r["ind"]
+                    badge = "🟢" if score >= 6 else "🟡" if score >= 4 else "⚪"
+                    ind   = r["ind"]
                     with st.container(border=True):
                         col_a, col_b, col_c, col_d, col_e = st.columns([3, 1, 1, 1, 2])
                         with col_a:
@@ -703,40 +729,32 @@ with tab_scan:
                             st.metric("スコア", f"{score}/8")
                         with col_c:
                             chg_color = "normal" if ind["change_pct"] >= 0 else "inverse"
-                            st.metric("現在値", f"{ind['price']:,.2f}", f"{ind['change_pct']:+.2f}%",
-                                      delta_color=chg_color)
+                            st.metric("現在値", f"{ind['price']:,.2f}",
+                                      f"{ind['change_pct']:+.2f}%", delta_color=chg_color)
                         with col_d:
                             st.metric("RSI", f"{ind['rsi']:.1f}")
                         with col_e:
-                            # 満たしているシグナルを表示
-                            for emoji, name, detail in r["signals"]:
+                            for emoji, name, _ in r["signals"]:
                                 st.caption(f"{emoji} {name}")
-
-                        # 個別分析ボタン
                         if st.button(f"🔍 {r['ticker']} を詳細分析する",
-                                     key=f"scan_to_single_{r['ticker']}",
-                                     use_container_width=True):
+                                     key=f"manual_detail_{r['ticker']}", use_container_width=True):
                             st.session_state["watchlist_trigger"] = r["ticker"]
                             st.rerun()
 
-            # エラー銘柄の表示
             if errors:
                 with st.expander(f"⚠️ データ取得失敗: {len(errors)}銘柄"):
                     for r in errors:
                         st.caption(f"・{r['ticker']}（{r['label']}）")
 
-            # Claude による上位銘柄の総評
             top_candidates = [r for r in filtered if r["score"] >= 4]
             if use_claude and top_candidates:
                 st.markdown("---")
                 st.subheader("🤖 Claude による買い候補の総評")
-                client = Anthropic(api_key=api_key)
-                ai_box = st.empty()
-                ai_text = ""
+                client   = Anthropic(api_key=api_key)
+                ai_box   = st.empty()
+                ai_text  = ""
                 with st.spinner("Claude が分析中…"):
                     for chunk in ask_claude_screening(client, top_candidates):
                         ai_text += chunk
                         ai_box.markdown(ai_text + "▌")
                 ai_box.markdown(ai_text)
-            elif use_claude and not top_candidates:
-                st.info("Claudeで分析する対象（スコア4点以上）の銘柄がありませんでした。")
