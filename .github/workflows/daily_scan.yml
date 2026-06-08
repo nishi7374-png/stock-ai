@@ -32,9 +32,9 @@ jobs:
       # 5. 結果ファイルをリポジトリにコミット・プッシュ
       - name: 結果をコミットして保存
         run: |
-          git config user.name  "github-actions[bot]"
+          git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add -f scan_today.json || true
-　　　　　 git add scan_prev.json || true
-          git diff --staged --quiet || git commit -m "自動スキャン結果を更新 $(date '+%Y/%m/%d %H:%M' -d '+9 hours')"
+          git add scan_today.json || true
+          git add scan_prev.json || true
+          git diff --staged --quiet || git commit -m "auto scan update"
           git push
