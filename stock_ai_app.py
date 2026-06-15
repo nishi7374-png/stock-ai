@@ -13,6 +13,7 @@ import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 from anthropic import Anthropic
+import requests
 
 # ─── ファイルパス ─────────────────────────────────────────────────
 HISTORY_FILE    = Path("analysis_history.json")
@@ -65,6 +66,25 @@ def load_watchlist():
 
 def save_watchlist(watchlist):
     WATCHLIST_FILE.write_text(json.dumps(watchlist, ensure_ascii=False, indent=2), encoding="utf-8")
+    try:
+        token = st.secrets.get("GITHUB_TOKEN", "")
+        repo  = st.secrets.get("GITHUB_REPO", "")
+        if not token or not repo:
+            return
+        url = f"https://api.github.com/repos/{repo}/contents/watchlist.json"
+        headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+        r = requests.get(url, headers=headers)
+        sha = r.json().get("sha", "") if r.status_code == 200 else ""
+        content = json.dumps(watchlist, ensure_ascii=False, indent=2)
+        import base64
+        payload = {
+            "message": "update watchlist",
+            "content": base64.b64encode(content.encode()).decode(),
+            "sha": sha
+        }
+        requests.put(url, headers=headers, json=payload)
+    except Exception:
+        pass
 
 # ─── スキャン結果の読み込み ───────────────────────────────────────
 def load_scan(path: Path):
