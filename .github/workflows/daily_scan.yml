@@ -2,8 +2,8 @@ name: 毎朝スクリーニング自動実行
 
 on:
   schedule:
-    # 毎朝5時に実行（UTC 20:00 = JST 5:00）
-    - cron: "0 20 * * 1-5"
+   # 毎日深夜0時に実行（UTC 15:00 = JST 0:00）
+    - cron: "0 15 * * *"
   workflow_dispatch:  # 手動でも実行できるようにする
 
 jobs:
