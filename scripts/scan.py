@@ -112,10 +112,10 @@ def fetch_and_score(ticker: str):
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         if df.index.tz is not None:
-       　　 df.index = df.index.tz_localize(None)
-   　　 df = df.dropna(subset=["Close"])
-   　　 if df is None or df.empty or len(df) < 26:
-       　　 return None
+            df.index = df.index.tz_localize(None)
+        df = df.dropna(subset=["Close"])
+        if df is None or df.empty or len(df) < 26:
+            return None
 
         close  = df["Close"].squeeze()
         high   = df["High"].squeeze()
@@ -212,7 +212,6 @@ def fetch_and_score(ticker: str):
         }
     except Exception:
         return None
-
 
 def run_scan():
     # スキャン対象：日経225 ＋ ウォッチリスト（重複排除）
