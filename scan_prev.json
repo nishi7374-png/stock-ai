@@ -1,5 +1,5 @@
 {
-  "scanned_at": "2026/07/12 12:10",
+  "scanned_at": "2026/07/12 16:06",
   "total": 247,
   "results": [
     {
@@ -2179,7 +2179,7 @@
     },
     {
       "ticker": "6758.T",
-      "company_name": "Sony Group Corporation",
+      "company_name": "6758.T",
       "score": 4,
       "signals": [
         "MACDゴールデンクロス",
@@ -4223,7 +4223,7 @@
     },
     {
       "ticker": "4661.T",
-      "company_name": "Oriental Land Co., Ltd.",
+      "company_name": "4661.T",
       "score": 3,
       "signals": [
         "MACDゴールデンクロス",
