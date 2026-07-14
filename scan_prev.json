@@ -1,5 +1,5 @@
 {
-  "scanned_at": "2026/07/12 16:06",
+  "scanned_at": "2026/07/13 17:19",
   "total": 247,
   "results": [
     {
@@ -2179,7 +2179,7 @@
     },
     {
       "ticker": "6758.T",
-      "company_name": "6758.T",
+      "company_name": "Sony Group Corporation",
       "score": 4,
       "signals": [
         "MACDゴールデンクロス",
@@ -4223,7 +4223,7 @@
     },
     {
       "ticker": "4661.T",
-      "company_name": "4661.T",
+      "company_name": "Oriental Land Co., Ltd.",
       "score": 3,
       "signals": [
         "MACDゴールデンクロス",
@@ -6167,7 +6167,7 @@
     },
     {
       "ticker": "2432.T",
-      "company_name": "DeNA Co., Ltd.",
+      "company_name": "2432.T",
       "score": 2,
       "signals": [
         "MACDゴールデンクロス",
