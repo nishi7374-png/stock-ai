@@ -1,5 +1,5 @@
 {
-  "scanned_at": "2026/07/19 16:04",
+  "scanned_at": "2026/07/20 16:29",
   "total": 248,
   "results": [
     {
@@ -1923,7 +1923,7 @@
     },
     {
       "ticker": "4188.T",
-      "company_name": "Mitsubishi Chemical Group Corporation",
+      "company_name": "4188.T",
       "score": 4,
       "signals": [
         "MACDゴールデンクロス",
@@ -5120,7 +5120,7 @@
     },
     {
       "ticker": "8011.T",
-      "company_name": "Sanyo Shokai Ltd.",
+      "company_name": "SANYO SHOKAI",
       "score": 3,
       "signals": [
         "MA25上抜け",
