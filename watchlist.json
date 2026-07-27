@@ -34,5 +34,9 @@
   {
     "ticker": "6136.T",
     "label": "osG"
+  },
+  {
+    "ticker": "8283.T",
+    "label": "ケーズHD"
   }
 ]
