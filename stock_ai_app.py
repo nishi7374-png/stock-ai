@@ -104,12 +104,6 @@ def get_alert_stocks():
     hits = [r for r in scan["results"] if r["score"] >= ALERT_SCORE]
     return hits[:ALERT_TOP_N], scan["scanned_at"]
 
-def get_vi():
-    """VI代用指標（2035）を返す"""
-    scan = load_scan(SCAN_TODAY_FILE)
-    if not scan:
-        return None
-    return scan.get("vi")
     
 # ─── 前日比較 ─────────────────────────────────────────────────────
 def get_score_changes():
