@@ -104,6 +104,13 @@ def get_alert_stocks():
     hits = [r for r in scan["results"] if r["score"] >= ALERT_SCORE]
     return hits[:ALERT_TOP_N], scan["scanned_at"]
 
+def get_vi():
+    """VI代用指標（2035）を返す"""
+    scan = load_scan(SCAN_TODAY_FILE)
+    if not scan:
+        return None
+    return scan.get("vi")
+    
 # ─── 前日比較 ─────────────────────────────────────────────────────
 def get_score_changes():
     """スコアが前日から最も大きく上昇した上位COMPARE_TOP_N銘柄を返す"""
@@ -510,6 +517,15 @@ with st.sidebar:
 # 🔔 アラートバナー（ページ最上部）
 # ══════════════════════════════════════════════════════════════════
 st.title("📈 株式テクニカル分析 × Claude AI")
+
+vi = get_vi()
+if vi:
+    st.metric(
+        "📊 VI代用指数（日経平均VI先物ETN・銘柄コード2035）",
+        f"{vi['price']:,.2f}",
+        f"{vi['change_pct']:+.2f}%",
+        delta_color="inverse",
+    )
 
 alert_stocks, scanned_at = get_alert_stocks()
 if alert_stocks:
