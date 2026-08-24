@@ -104,6 +104,25 @@ def load_watchlist_tickers():
     return []
 
 # ─── テクニカル指標 ───────────────────────────────────────────────
+def fetch_vi():
+    """VI代用指標（NEXT NOTES 日経平均VI先物指数ETN 2035）を取得する"""
+    try:
+        tk = yf.Ticker("2035.T")
+        df = tk.history(period="5d", auto_adjust=True)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+        df = df.dropna(subset=["Close"])
+        if df is None or df.empty or len(df) < 2:
+            return None
+        close = df["Close"].squeeze()
+        price = float(close.iloc[-1])
+        prev  = float(close.iloc[-2])
+        return {
+            "price":      price,
+            "change_pct": (price - prev) / prev * 100,
+        }
+    except Exception:
+        return None
 def fetch_and_score(ticker: str):
     """1銘柄を取得してスコアを返す。失敗したらNoneを返す。"""
     try:
@@ -233,6 +252,10 @@ def run_scan():
     # スコア降順でソート
     results.sort(key=lambda x: x["score"], reverse=True)
 
+    # VI代用指標を取得
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] VI代用指標を取得中...")
+    vi = fetch_vi()
+
     # 前回の結果を退避
     if SCAN_TODAY_FILE.exists():
         SCAN_TODAY_FILE.rename(SCAN_PREV_FILE)
@@ -242,6 +265,7 @@ def run_scan():
         json.dumps({
             "scanned_at": datetime.now().strftime("%Y/%m/%d %H:%M"),
             "total":      len(results),
+            "vi":         vi,
             "results":    results,
         }, ensure_ascii=False, indent=2),
         encoding="utf-8"
