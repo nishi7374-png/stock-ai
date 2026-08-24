@@ -518,15 +518,6 @@ with st.sidebar:
 # ══════════════════════════════════════════════════════════════════
 st.title("📈 株式テクニカル分析 × Claude AI")
 
-vi = get_vi()
-if vi:
-    st.metric(
-        "📊 VI代用指数（日経平均VI先物ETN・銘柄コード2035）",
-        f"{vi['price']:,.2f}",
-        f"{vi['change_pct']:+.2f}%",
-        delta_color="inverse",
-    )
-
 alert_stocks, scanned_at = get_alert_stocks()
 if alert_stocks:
     names = "　".join([f"**{r['ticker']}**（{r['score']}点）" for r in alert_stocks])
