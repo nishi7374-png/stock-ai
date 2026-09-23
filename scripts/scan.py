@@ -233,7 +233,7 @@ def run_scan():
     # スコア降順でソート
     results.sort(key=lambda x: x["score"], reverse=True)
 
-　  # 前回の結果を退避
+    # 前回の結果を退避
     if SCAN_TODAY_FILE.exists():
         SCAN_TODAY_FILE.rename(SCAN_PREV_FILE)
 
@@ -242,7 +242,7 @@ def run_scan():
         json.dumps({
             "scanned_at": datetime.now().strftime("%Y/%m/%d %H:%M"),
             "total":      len(results),
-             "results":    results,
+            "results":    results,
         }, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
