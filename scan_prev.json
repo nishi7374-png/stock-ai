@@ -1,5 +1,5 @@
 {
-  "scanned_at": "2026/10/11 19:26",
+  "scanned_at": "2026/10/12 22:29",
   "total": 248,
   "results": [
     {
@@ -6156,7 +6156,7 @@
     },
     {
       "ticker": "5202.T",
-      "company_name": "Nippon Sheet Glass Company, Limited",
+      "company_name": "Nippon Sheet Glass Co Ltd",
       "score": 2,
       "signals": [
         "MA25上抜け",
